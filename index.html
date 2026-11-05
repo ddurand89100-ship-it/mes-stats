@@ -259,7 +259,7 @@ function computeAlloc(s, amount, type){
   let prov=0, ep=0;
   if(type==='prime') ep = amount*p.pPrime/100;
   else if(type==='sponsor'||type==='image'||type==='annexe'){ prov = amount*p.taux/100; ep = (amount-prov)*p.pAnnexe/100; }
-  else ep = amount*p.pSal/100;
+  else ep = (type==='salaire' && p.salMode==='fixe') ? Math.min(amount, +p.salFixe||0) : amount*p.pSal/100;
   prov=Math.round(prov); ep=Math.round(ep);
   const b=balances(s); const room=Math.max(0, coussinTarget(s)-b.coussin);
   const toC=Math.min(ep, room), toT=ep-toC;
@@ -269,12 +269,13 @@ function ruleText(s,type){
   const p=s.profile;
   if(type==='prime') return `Règle prime : ${p.pPrime} % mis de côté. Une bonne saison ne doit pas gonfler ton train de vie.`;
   if(type==='sponsor'||type==='image'||type==='annexe') return `Revenu hors salaire : ${p.taux} % réservés aux cotisations et impôts, puis ${p.pAnnexe} % du reste mis de côté.`;
-  return `Règle salaire : ${p.pSal} % mis de côté le jour de la paie. On épargne d'abord, on dépense ensuite.`;
+  if(type==='salaire' && p.salMode==='fixe') return `Règle salaire : ${eur(p.salFixe)} mis de côté à chaque paie. On épargne d'abord, on dépense ensuite.`;
+  return `Règle ${type==='salaire'?'salaire':'entrée'} : ${p.pSal} % mis de côté. On épargne d'abord, on dépense ensuite.`;
 }
 
 /* ---------- Données d'exemple (fictives) ---------- */
 function sample(){
-  const s={sample:true, profile:{prenom:'Lucas', poste:'Pivot', pSal:15, pPrime:50, pAnnexe:40, taux:25, objMois:6, saisons:3, besoinApres:3000,
+  const s={sample:true, profile:{prenom:'Lucas', poste:'Pivot', pSal:15, salMode:'pct', salFixe:450, pPrime:50, pAnnexe:40, taux:25, objMois:6, saisons:3, besoinApres:3000,
     charges:[{id:uid(),label:'Loyer',montant:950},{id:uid(),label:'Crédit voiture',montant:380},{id:uid(),label:'Assurances',montant:120},{id:uid(),label:'Téléphone et abonnements',montant:60},{id:uid(),label:'Courses',montant:450}]},
     projets:[{id:'p1',nom:"Diplôme d'entraîneur",budget:1800},{id:'p2',nom:"Stage d'été pour les jeunes",budget:600}], mvts:[]};
   const IN=(date,type,amount,label)=>s.mvts.push({id:uid(),dir:'in',date,type,amount,label,alloc:computeAlloc(s,amount,type)});
@@ -454,7 +455,12 @@ function vReglages(){
     </section>
     <section class="card"><h2>Mes règles de répartition</h2>
       <p class="lede" style="margin-bottom:12px">Appliquées à chaque nouvelle entrée. Les entrées déjà saisies gardent leur répartition.</p>
-      ${rng('r-psal','pSal','Part du salaire mise de côté',0,50)}
+      <div class="field"><span class="lab">Mise de côté sur le salaire</span>
+        <div class="seg" style="margin:0 0 8px"><button type="button" data-salmode="pct" aria-pressed="${(p.salMode||'pct')==='pct'}">En pourcentage</button><button type="button" data-salmode="fixe" aria-pressed="${p.salMode==='fixe'}">Montant fixe</button></div>
+        ${p.salMode==='fixe'
+          ? `<label for="r-salfixe" class="lab">Montant mis de côté à chaque paie (€)</label><input id="r-salfixe" type="number" min="0" step="10" value="${p.salFixe??450}" data-prof="salFixe" inputmode="numeric">`
+          : `<div class="range"><input type="range" id="r-psal" min="0" max="50" step="5" value="${p.pSal}" data-prof="pSal" aria-label="Part du salaire mise de côté"><output class="num">${p.pSal} %</output></div>`}
+      </div>
       ${rng('r-pprime','pPrime','Part des primes mise de côté',0,100)}
       ${rng('r-taux','taux','Réserve cotisations et impôts sur les revenus hors salaire',0,50)}
       ${rng('r-pannexe','pAnnexe','Part du reste mise de côté (sponsor, image, annexe)',0,100)}
@@ -529,7 +535,7 @@ function toast(msg){
 
 /* ---------- Événements ---------- */
 document.addEventListener('click',e=>{
-  const el=e.target.closest('[data-go],[data-action],[data-dir],[data-type],[data-cat],[data-filter],[data-del],[data-delproj],[data-delcharge],[data-confirm]');
+  const el=e.target.closest('[data-salmode],[data-go],[data-action],[data-dir],[data-type],[data-cat],[data-filter],[data-del],[data-delproj],[data-delcharge],[data-confirm]');
   if(!el) return;
   if(el.dataset.action==='close-add' && el.classList.contains('sheet-bg') && e.target!==el) return;
   if(el.dataset.go){ view=el.dataset.go; confirmKind=null; render(); window.scrollTo(0,0); return; }
@@ -541,6 +547,7 @@ document.addEventListener('click',e=>{
   if(el.dataset.delproj){ S.projets=S.projets.filter(p=>p.id!==el.dataset.delproj); save(); render(); return; }
   if(el.dataset.delcharge){ S.profile.charges=S.profile.charges.filter(c=>c.id!==el.dataset.delcharge); save(); render(); return; }
   if(el.dataset.confirm){ confirmKind=el.dataset.confirm; render(); return; }
+  if(el.dataset.salmode){ S.profile.salMode=el.dataset.salmode; if(S.profile.salFixe==null) S.profile.salFixe=450; save(); render(); return; }
   const a=el.dataset.action;
   if(a==='export'){ try{ const blob=new Blob([JSON.stringify(S,null,2)],{type:'application/json'}); const url=URL.createObjectURL(blob); const ln=document.createElement('a'); ln.href=url; ln.download=`mes-stats-sauvegarde-${todayISO()}.json`; document.body.appendChild(ln); ln.click(); ln.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500); toast('Sauvegarde téléchargée. Garde ce fichier en lieu sûr.'); }catch(err){ toast("La sauvegarde n'a pas pu être créée sur cet appareil."); } return; }
   if(a==='open-add'){ Object.assign(addState,{amount:'',label:'',date:''}); sheet(); }

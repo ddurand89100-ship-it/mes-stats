@@ -259,7 +259,8 @@ function recomputeAll(s){
   const sorted=[...s.mvts].sort((a,b)=>a.date.localeCompare(b.date));
   const tmp={...s, mvts:[]};
   for(const m of sorted){
-    if(m.dir==='in' && m.type!=='init') m.alloc=computeAlloc(tmp,m.amount,m.type);
+    if(m.dir==='in' && m.type==='ajust'){ const bb=balances(tmp); m.alloc={vivre:0,coussin:0,transition:0,provision:0}; m.alloc[m.target.env]=m.target.value-bb[m.target.env]; }
+    else if(m.dir==='in' && m.type!=='init') m.alloc=computeAlloc(tmp,m.amount,m.type);
     tmp.mvts.push(m);
   }
   s.mvts=sorted;
@@ -333,14 +334,30 @@ function shiftMonth(m,k){ let [y,mo]=m.split('-').map(Number); mo+=k; while(mo<1
 function monthStats(m){
   let e=0,o=0,sv=0;
   for(const x of S.mvts){ if(ym(x.date)!==m) continue;
-    if(x.dir==='in' && x.type!=='init'){ e+=x.amount; sv+=x.alloc.coussin+x.alloc.transition; }
+    if(x.dir==='in' && isReal(x)){ e+=x.amount; sv+=x.alloc.coussin+x.alloc.transition; }
     if(x.dir==='out') o+=x.amount; }
   return {e,o,sv};
 }
 function sources(){
   const a=anchorMonth(), from=shiftMonth(a,-11), t={};
-  for(const x of S.mvts){ if(x.dir!=='in'||x.type==='init') continue; const m=ym(x.date); if(m<from||m>a) continue; t[x.type]=(t[x.type]||0)+x.amount; }
+  for(const x of S.mvts){ if(x.dir!=='in'||!isReal(x)) continue; const m=ym(x.date); if(m<from||m>a) continue; t[x.type]=(t[x.type]||0)+x.amount; }
   return Object.entries(t).sort((a,b)=>b[1]-a[1]);
+}
+function isReal(m){ return m.type!=='init' && m.type!=='ajust'; }
+const mLabel = m => { const [y,mo]=m.split('-'); return `${MOIS_L[+mo-1]} ${y}`; };
+function chargesEditor(){
+  return `<div>${S.profile.charges.map(c=>`<div class="charge"><input id="c-${c.id}-l" aria-label="Libellé" value="${esc(c.label)}" data-charge="${c.id}" data-k="label"><input id="c-${c.id}-m" aria-label="Montant" type="number" min="0" step="10" value="${c.montant}" data-charge="${c.id}" data-k="montant" inputmode="numeric"><button type="button" data-delcharge="${c.id}" aria-label="Retirer">×</button></div>`).join('')}</div>
+  <button class="btn" data-action="add-charge">Ajouter une charge</button>`;
+}
+function rythmeAuto(){ const a=anchorMonth(); let t=0; for(let i=0;i<3;i++) t+=monthStats(shiftMonth(a,-i)).sv; return Math.round(t/3); }
+function rythme(){ const r=S.profile.rythme; return (r==null||r==='')? rythmeAuto() : (+r||0); }
+function careerEnd(){ const [y,mo]=anchorMonth().split('-').map(Number); return `${(mo>=7?y+1:y)+Math.max(1,+S.profile.saisons||1)-1}-06`; }
+function projection(){
+  const b=balances(S), r=rythme(), a=anchorMonth();
+  const needC=Math.max(0,coussinTarget(S)-b.coussin), needT=Math.max(0,12*S.profile.besoinApres-b.transition);
+  if(r<=0) return {r, ok:false, needC, needT, end:careerEnd()};
+  const nC=Math.ceil(needC/r), nT=Math.ceil((needC+needT)/r);
+  return {r, ok:true, nC, nT, c:shiftMonth(a,nC), t:shiftMonth(a,nT), end:careerEnd(), needC, needT};
 }
 function projSpent(id){ return S.mvts.filter(m=>m.dir==='out'&&m.projet===id).reduce((a,m)=>a+m.amount,0); }
 function status(pct){ if(pct>=1) return ['ok','Objectif atteint']; if(pct>=0.5) return ['mid','En construction']; return ['low','À renforcer']; }
@@ -356,8 +373,9 @@ function vAccueil(){
   const st=monthStats(a), ch=chargesTotal(S), tgt=coussinTarget(S);
   const mC = ch? b.coussin/ch : 0, mAll = ch? (b.coussin+b.vivre)/ch : 0;
   const [cls,lab]=status(tgt? b.coussin/tgt : 0);
+  const pj=projection();
   const trTarget = 12*p.besoinApres, trLeft=Math.max(0,trTarget-b.transition), perSeason = p.saisons? trLeft/p.saisons : trLeft;
-  const recent=[...S.mvts].filter(m=>m.type!=='init').sort((x,z)=>z.date.localeCompare(x.date)).slice(0,5);
+  const recent=[...S.mvts].filter(isReal).sort((x,z)=>z.date.localeCompare(x.date)).slice(0,5);
   const src=sources(), srcMax=Math.max(1,...src.map(s=>s[1])), srcTot=src.reduce((t,s)=>t+s[1],0);
   return header(p.prenom?`Salut ${p.prenom}`:'Mon tableau de bord', `${p.poste?esc(p.poste)+' · ':''}Ta situation au ${MOIS_L[+mo-1]} ${y}`) +
   (S.sample?`<div class="banner"><span>Ceci est un exemple avec un joueur fictif. Tes vraies données ne remplacent rien tant que tu ne pars pas de zéro.</span><button class="btn" data-go="reglages">Partir de zéro</button></div>`:'') +
@@ -373,13 +391,13 @@ function vAccueil(){
       <div class="kpi"><b class="num">${mC.toLocaleString('fr-FR',{maximumFractionDigits:1})}</b><span>mois couverts par ton coussin</span></div>
       <div class="gauge" role="img" aria-label="Coussin rempli à ${Math.round(Math.min(100,tgt?b.coussin/tgt*100:0))} %"><i style="width:${Math.min(100,tgt?b.coussin/tgt*100:0)}%"></i></div>
       <div class="rows"><div><span>Objectif${p.coussinMode==='montant'?' fixé':` : ${p.objMois} mois de charges`} · <button class="del" data-go="objectifs">Modifier</button></span><b class="num">${eur(tgt)}</b></div><div><span>Il manque</span><b class="num">${eur(Math.max(0,tgt-b.coussin))}</b></div><div><span>Avec le reste à vivre</span><b class="num">${mAll.toLocaleString('fr-FR',{maximumFractionDigits:1})} mois</b></div></div>
-      <p class="note">${b.coussin>=tgt&&tgt>0?'Objectif atteint : ce que tu mets de côté part maintenant sur ton épargne transition.':'Ce que tu mets de côté remplit d\'abord ce coussin.'}</p>
+      <p class="note">${b.coussin>=tgt&&tgt>0?'Objectif atteint : ce que tu mets de côté part maintenant sur ton épargne transition.':(pj.ok?`À ton rythme de ${eur(pj.r)} par mois, objectif atteint en <b>${mLabel(pj.c)}</b>.`:'Ce que tu mets de côté remplit d\'abord ce coussin.')}</p>
     </section>
     <section class="card s3"><h2>Préparer l'échéance <small>${p.saisons} saison${p.saisons>1?'s':''} restante${p.saisons>1?'s':''}</small></h2>
       <div class="kpi"><b class="num">${eur(perSeason)}</b><span>à mettre de côté par saison</span></div>
       <div class="gauge tr"><i style="width:${Math.min(100,trTarget?b.transition/trTarget*100:0)}%"></i></div>
-      <div class="rows"><div><span>Objectif : 12 mois à ${eur(p.besoinApres)}</span><b class="num">${eur(trTarget)}</b></div><div><span>Déjà de côté</span><b class="num">${eur(b.transition)}</b></div></div>
-      ${b.transition===0?'<p class="note">L\'épargne transition se remplit dès que ton coussin de sécurité est complet.</p>':''}
+      <div class="rows"><div><span>Objectif : 12 mois à ${eur(p.besoinApres)}</span><b class="num">${eur(trTarget)}</b></div><div><span>Déjà de côté · <button class="del" data-go="objectifs">Modifier</button></span><b class="num">${eur(b.transition)}</b></div></div>
+      <p class="note">${pj.ok? `À ce rythme, objectif atteint en <b>${mLabel(pj.t)}</b>, ${pj.t<=pj.end?'avant':'après'} ta fin de carrière prévue (${mLabel(pj.end)}).` : 'L\'épargne transition se remplit dès que ton coussin de sécurité est complet.'}</p>
     </section>
     <section class="card s4 chart"><h2>Entrées et sorties <small>6 derniers mois</small></h2>${chart6(a)}
       <div class="legend"><span><i style="background:var(--teal-2)"></i>Entrées</span><span><i style="background:var(--coral)"></i>Sorties</span></div></section>
@@ -410,10 +428,11 @@ function projList(){
   return S.projets.map(pr=>{ const sp=projSpent(pr.id); return `<div class="proj"><div class="h"><b>${esc(pr.nom)}</b><span class="num">${eur(sp)} / ${eur(pr.budget)}</span></div><div class="gauge"><i style="width:${Math.min(100,pr.budget?sp/pr.budget*100:0)}%"></i></div></div>`; }).join('');
 }
 function opRow(m, withDel){
+  if(m.type==='ajust') return `<div class="op"><div class="ico in">=</div><div class="l"><b>${esc(m.label)}</b><small>${fmtDate(m.date)} · ${ENVS[m.target.env].nom}</small></div><div class="a num">${eur(m.target.value)}<small>montant réel saisi</small>${withDel?`<button class="del" data-del="${m.id}">Supprimer</button>`:''}</div></div>`;
   const isIn=m.dir==='in';
   const lab = isIn? (TYPES_IN[m.type]||'Épargne de départ') : CATS_OUT[m.cat];
   const pr = m.projet? S.projets.find(p=>p.id===m.projet) : null;
-  const extra = isIn && m.type!=='init' ? `${eur(m.alloc.coussin+m.alloc.transition)} de côté${m.alloc.provision?` · ${eur(m.alloc.provision)} réservés`:''}` : (!isIn && m.src!=='vivre'? `Payé depuis ${ENVS[m.src].nom.toLowerCase()}` : (pr?esc(pr.nom):''));
+  const extra = isIn && isReal(m) ? `${eur(m.alloc.coussin+m.alloc.transition)} de côté${m.alloc.provision?` · ${eur(m.alloc.provision)} réservés`:''}` : (!isIn && m.src!=='vivre'? `Payé depuis ${ENVS[m.src].nom.toLowerCase()}` : (pr?esc(pr.nom):''));
   return `<div class="op"><div class="ico ${isIn?'in':'out'}">${isIn?'+':'−'}</div>
     <div class="l"><b>${esc(m.label||lab)}</b><small>${fmtDate(m.date)} · ${lab}</small></div>
     <div class="a ${isIn?'in':''} num">${isIn?'+':'−'}${eur(m.amount)}${extra?`<small>${extra}</small>`:''}${withDel?`<button class="del" data-del="${m.id}">Supprimer</button>`:''}</div></div>`;
@@ -427,9 +446,14 @@ function vOperations(){
   <div class="card" style="margin-top:12px">${Object.keys(groups).length? Object.entries(groups).map(([m,ops])=>{ const [y,mo]=m.split('-'); const st=monthStats(m);
     return `<div class="month-h"><span>${MOIS_L[+mo-1]} ${y}</span><span class="num">+${eur(st.e)} · −${eur(st.o)}</span></div><div class="list">${ops.map(o=>opRow(o,true)).join('')}</div>`; }).join('') : '<p class="lede">Rien à afficher.</p>'}</div>`;
 }
+function monthsBetween(a,b){ const [y1,m1]=a.split('-').map(Number),[y2,m2]=b.split('-').map(Number); return (y2-y1)*12+(m2-m1); }
+function reelForm(env, current){
+  return `<form id="f-reel-${env}" class="two" style="margin-top:12px;align-items:end"><div class="field" style="margin:0"><label for="o-reel-${env}">Mon montant réel aujourd'hui (€)</label><input id="o-reel-${env}" type="number" min="0" step="10" inputmode="numeric" placeholder="${Math.round(current)}"></div><button class="btn" type="submit">Mettre à jour</button></form>
+  <p class="note">D'après ton relevé bancaire. Seul le montant est saisi : l'appli ne se connecte pas à ta banque.</p>`;
+}
 function vObjectifs(){
   const p=S.profile, b=balances(S), ch=chargesTotal(S), tgt=coussinTarget(S);
-  const trT=12*p.besoinApres, left=Math.max(0,trT-b.transition), perS=p.saisons?left/p.saisons:left, perM=perS/12;
+  const trT=12*p.besoinApres, left=Math.max(0,trT-b.transition), perS=p.saisons?left/p.saisons:left, perM=perS/12, pj=projection();
   return header('Objectifs','Le coussin d\'abord, la transition ensuite, les projets à côté.') +
   `<div class="grid g-2">
     <section class="card"><h2>Coussin de sécurité</h2>
@@ -442,6 +466,8 @@ function vObjectifs(){
       </div>
       <div class="gauge"><i style="width:${Math.min(100,tgt?b.coussin/tgt*100:0)}%"></i></div>
       <div class="rows"><div><span>Objectif</span><b class="num">${eur(tgt)}</b></div><div><span>Aujourd'hui</span><b class="num">${eur(b.coussin)}</b></div></div>
+      ${reelForm('coussin', b.coussin)}
+      ${(p.coussinMode||'mois')==='mois'?`<details style="margin-top:12px"><summary class="lab" style="cursor:pointer">Mes charges fixes : ${eur(ch)} par mois · modifier</summary><div style="margin-top:10px">${chargesEditor()}</div></details>`:''}
       <p class="note">Ce que tu mets de côté va d'abord ici. Une fois l'objectif atteint, le surplus part sur ton épargne transition. Si tu remontes l'objectif, le coussin se remplit à nouveau.</p>
     </section>
     <section class="card"><h2>Préparer l'échéance</h2>
@@ -452,6 +478,19 @@ function vObjectifs(){
       </div>
       <div class="gauge tr"><i style="width:${Math.min(100,trT?b.transition/trT*100:0)}%"></i></div>
       <div class="rows"><div><span>Objectif</span><b class="num">${eur(trT)}</b></div><div><span>Déjà de côté</span><b class="num">${eur(b.transition)}</b></div><div><span>Par saison</span><b class="num">${eur(perS)}</b></div><div><span>Soit par mois</span><b class="num">${eur(perM)}</b></div></div>
+      ${reelForm('transition', b.transition)}
+    </section>
+    <section class="card"><h2>Ma projection</h2>
+      <p class="lede">Combien tu mets de côté chaque mois, et quand tu atteins tes objectifs.</p>
+      <div class="field" style="margin-top:12px"><label for="o-rythme">Je mets de côté par mois (€)</label>
+        <input id="o-rythme" type="number" min="0" step="50" inputmode="numeric" placeholder="${rythmeAuto()}" value="${p.rythme==null?'':p.rythme}">
+        <p class="note">${p.rythme==null?`Calculé sur tes 3 derniers mois : ${eur(rythmeAuto())}. Saisis un autre montant pour simuler.`:`Simulation. <button class="del" data-action="reset-rythme">Revenir à mon rythme réel (${eur(rythmeAuto())})</button>`}</p></div>
+      ${pj.ok?`<div class="rows">
+        <div><span>Coussin complet</span><b class="num">${pj.needC?mLabel(pj.c):'Déjà atteint'}</b></div>
+        <div><span>Épargne transition complète</span><b class="num">${pj.needT?mLabel(pj.t):'Déjà atteinte'}</b></div>
+        <div><span>Fin de carrière prévue</span><b class="num">${mLabel(pj.end)}</b></div></div>
+        <p class="note">${pj.t<=pj.end?'Tu es dans les temps.':`Il te manquera environ ${eur((pj.needC+pj.needT)-pj.r*Math.max(0,monthsBetween(anchorMonth(),pj.end)))} à ta fin de carrière. Pour être prêt à temps, il faudrait mettre de côté environ ${eur((pj.needC+pj.needT)/Math.max(1,monthsBetween(anchorMonth(),pj.end)))} par mois.`}</p>`
+      :'<p class="note">Saisis un montant mensuel pour voir ta projection.</p>'}
     </section>
     <section class="card"><h2>Mes projets</h2>${projList()}
       <form id="f-proj" style="margin-top:14px"><div class="two"><div class="field"><label for="p-nom">Nouveau projet</label><input id="p-nom" required placeholder="Ex. : formation, stage, matériel"></div>
@@ -484,8 +523,7 @@ function vReglages(){
       <p class="note">La réserve est un taux indicatif. Il dépend de ton statut et de ta situation fiscale : vérifie-le avec un professionnel.</p>
     </section>
     <section class="card"><h2>Mes charges fixes <small>${eur(chargesTotal(S))} / mois</small></h2>
-      <div id="charges">${p.charges.map(c=>`<div class="charge"><input aria-label="Libellé" value="${esc(c.label)}" data-charge="${c.id}" data-k="label"><input aria-label="Montant" type="number" min="0" step="10" value="${c.montant}" data-charge="${c.id}" data-k="montant" inputmode="numeric"><button type="button" data-delcharge="${c.id}" aria-label="Retirer">×</button></div>`).join('')}</div>
-      <button class="btn" data-action="add-charge">Ajouter une charge</button>
+      ${chargesEditor()}
       <p class="note">Elles servent à calculer combien de mois tu tiens sans salaire.</p>
     </section>
     <section class="card"><h2>Mes données</h2>
@@ -571,6 +609,7 @@ document.addEventListener('click',e=>{
   if(a==='open-add'){ Object.assign(addState,{amount:'',label:'',date:''}); sheet(); }
   if(a==='close-add'){ document.getElementById('layer').innerHTML=''; }
   if(a==='add-charge'){ S.profile.charges.push({id:uid(),label:'Nouvelle charge',montant:0}); save(); render(); }
+  if(a==='reset-rythme'){ S.profile.rythme=null; save(); render(); }
   if(a==='cancel-confirm'){ confirmKind=null; render(); }
   if(a==='do-zero'){ S=blank(); confirmKind=null; save(); view='reglages'; render(); toast('C\'est parti : renseigne ton prénom et tes charges fixes, puis ajoute ta première entrée.'); }
   if(a==='do-exemple'){ S=sample(); confirmKind=null; save(); view='accueil'; render(); toast('Exemple rechargé.'); }
@@ -591,10 +630,17 @@ document.addEventListener('change',e=>{
   if(t.id==='imp' && t.files && t.files[0]){ const rd=new FileReader(); rd.onload=()=>{ try{ const d=JSON.parse(rd.result); if(!d||!d.profile||!Array.isArray(d.mvts)) throw 0; d.projets=d.projets||[]; S=d; save(); view='accueil'; render(); toast('Sauvegarde importée.'); }catch(err){ toast("Ce fichier n'est pas une sauvegarde Mes stats."); } }; rd.readAsText(t.files[0]); }
   if(t.dataset.prof && t.type!=='text' && !(t.id==='r-prenom'||t.id==='r-poste')){ if(['pSal','pPrime','pAnnexe','taux','salFixe','objMois','coussinMontant'].includes(t.dataset.prof)) recomputeAll(S); save(); render(); }
   if(t.dataset.charge){ recomputeAll(S); save(); render(); }
+  if(t.id==='o-rythme'){ S.profile.rythme = t.value===''? null : Math.max(0,+t.value||0); save(); render(); }
 });
 document.addEventListener('submit',e=>{
   e.preventDefault();
   if(e.target.id==='f-proj'){ const n=document.getElementById('p-nom').value.trim(), b=+document.getElementById('p-budget').value||0; if(!n) return; S.projets.push({id:uid(),nom:n,budget:b}); save(); render(); toast(`Projet « ${n} » ajouté.`); return; }
+  if(e.target.id.startsWith('f-reel-')){
+    const env=e.target.id.slice(7), inp=document.getElementById('o-reel-'+env); if(inp.value===''){ inp.focus(); return; }
+    const value=Math.max(0,Math.round(+inp.value||0));
+    S.mvts.push({id:uid(),dir:'in',date:todayISO(),type:'ajust',amount:0,label:'Mise à jour du montant réel',target:{env,value},alloc:{vivre:0,coussin:0,transition:0,provision:0}});
+    recomputeAll(S); save(); render(); toast(`${ENVS[env].nom} mis à jour : ${eur(value)}.`); return;
+  }
   if(e.target.id!=='f-add') return;
   const amt=Math.round(+document.getElementById('a-montant').value||0);
   if(amt<=0){ document.getElementById('a-montant').focus(); return; }

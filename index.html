@@ -254,6 +254,16 @@ function balances(s){
   }
   return b;
 }
+// Recalcule la répartition de toutes les entrées avec les règles actuelles, dans l'ordre des dates
+function recomputeAll(s){
+  const sorted=[...s.mvts].sort((a,b)=>a.date.localeCompare(b.date));
+  const tmp={...s, mvts:[]};
+  for(const m of sorted){
+    if(m.dir==='in' && m.type!=='init') m.alloc=computeAlloc(tmp,m.amount,m.type);
+    tmp.mvts.push(m);
+  }
+  s.mvts=sorted;
+}
 function computeAlloc(s, amount, type){
   const p=s.profile; amount=+amount||0;
   let prov=0, ep=0;
@@ -454,7 +464,7 @@ function vReglages(){
       <div class="field"><label for="r-poste">Poste</label><input id="r-poste" value="${esc(p.poste)}" data-prof="poste"></div></div>
     </section>
     <section class="card"><h2>Mes règles de répartition</h2>
-      <p class="lede" style="margin-bottom:12px">Appliquées à chaque nouvelle entrée. Les entrées déjà saisies gardent leur répartition.</p>
+      <p class="lede" style="margin-bottom:12px">Quand tu changes une règle, toutes tes entrées sont recalculées, y compris celles déjà saisies. L'accueil se met à jour tout de suite.</p>
       <div class="field"><span class="lab">Mise de côté sur le salaire</span>
         <div class="seg" style="margin:0 0 8px"><button type="button" data-salmode="pct" aria-pressed="${(p.salMode||'pct')==='pct'}">En pourcentage</button><button type="button" data-salmode="fixe" aria-pressed="${p.salMode==='fixe'}">Montant fixe</button></div>
         ${p.salMode==='fixe'
@@ -543,11 +553,11 @@ document.addEventListener('click',e=>{
   if(el.dataset.type){ keepForm(); addState.type=el.dataset.type; sheet(); return; }
   if(el.dataset.cat){ keepForm(); addState.cat=el.dataset.cat; if(el.dataset.cat==='cotisations') addState.src='provision'; sheet(); return; }
   if(el.dataset.filter){ opFilter=el.dataset.filter; render(); return; }
-  if(el.dataset.del){ S.mvts=S.mvts.filter(m=>m.id!==el.dataset.del); save(); render(); toast('Opération supprimée.'); return; }
+  if(el.dataset.del){ S.mvts=S.mvts.filter(m=>m.id!==el.dataset.del); recomputeAll(S); save(); render(); toast('Opération supprimée.'); return; }
   if(el.dataset.delproj){ S.projets=S.projets.filter(p=>p.id!==el.dataset.delproj); save(); render(); return; }
-  if(el.dataset.delcharge){ S.profile.charges=S.profile.charges.filter(c=>c.id!==el.dataset.delcharge); save(); render(); return; }
+  if(el.dataset.delcharge){ S.profile.charges=S.profile.charges.filter(c=>c.id!==el.dataset.delcharge); recomputeAll(S); save(); render(); return; }
   if(el.dataset.confirm){ confirmKind=el.dataset.confirm; render(); return; }
-  if(el.dataset.salmode){ S.profile.salMode=el.dataset.salmode; if(S.profile.salFixe==null) S.profile.salFixe=450; save(); render(); return; }
+  if(el.dataset.salmode){ S.profile.salMode=el.dataset.salmode; if(S.profile.salFixe==null) S.profile.salFixe=450; recomputeAll(S); save(); render(); return; }
   const a=el.dataset.action;
   if(a==='export'){ try{ const blob=new Blob([JSON.stringify(S,null,2)],{type:'application/json'}); const url=URL.createObjectURL(blob); const ln=document.createElement('a'); ln.href=url; ln.download=`mes-stats-sauvegarde-${todayISO()}.json`; document.body.appendChild(ln); ln.click(); ln.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500); toast('Sauvegarde téléchargée. Garde ce fichier en lieu sûr.'); }catch(err){ toast("La sauvegarde n'a pas pu être créée sur cet appareil."); } return; }
   if(a==='open-add'){ Object.assign(addState,{amount:'',label:'',date:''}); sheet(); }
@@ -571,8 +581,8 @@ document.addEventListener('change',e=>{
   const t=e.target;
   if(t.id==='a-src'){ addState.src=t.value; updateSplit(); }
   if(t.id==='imp' && t.files && t.files[0]){ const rd=new FileReader(); rd.onload=()=>{ try{ const d=JSON.parse(rd.result); if(!d||!d.profile||!Array.isArray(d.mvts)) throw 0; d.projets=d.projets||[]; S=d; save(); view='accueil'; render(); toast('Sauvegarde importée.'); }catch(err){ toast("Ce fichier n'est pas une sauvegarde Mes stats."); } }; rd.readAsText(t.files[0]); }
-  if(t.dataset.prof && t.type!=='text' && !(t.id==='r-prenom'||t.id==='r-poste')) render();
-  if(t.dataset.charge) render();
+  if(t.dataset.prof && t.type!=='text' && !(t.id==='r-prenom'||t.id==='r-poste')){ if(['pSal','pPrime','pAnnexe','taux','salFixe','objMois'].includes(t.dataset.prof)) recomputeAll(S); save(); render(); }
+  if(t.dataset.charge){ recomputeAll(S); save(); render(); }
 });
 document.addEventListener('submit',e=>{
   e.preventDefault();

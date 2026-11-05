@@ -1,5 +1,5 @@
 // Mes stats : fonctionne hors ligne. Aucune donnée du joueur ne passe par ici.
-const VERSION = 'mes-stats-v2';
+const VERSION = 'mes-stats-v3';
 const ASSETS = ['./', './index.html', './manifest.webmanifest',
   './fonts/archivo.woff2', './fonts/source-sans-3-400.woff2', './fonts/source-sans-3-600.woff2', './fonts/source-sans-3-700.woff2',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-180.png'];

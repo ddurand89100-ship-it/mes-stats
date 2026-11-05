@@ -245,7 +245,7 @@ const fmtDate = d => { const [y,m,j]=d.split('-'); return `${+j} ${MOIS[+m-1]}`;
 
 /* ---------- Moteur ---------- */
 function chargesTotal(s){ return s.profile.charges.reduce((a,c)=>a+(+c.montant||0),0); }
-function coussinTarget(s){ return s.profile.objMois * chargesTotal(s); }
+function coussinTarget(s){ const p=s.profile; return p.coussinMode==='montant' ? (+p.coussinMontant||0) : p.objMois * chargesTotal(s); }
 function balances(s){
   const b={vivre:0,coussin:0,transition:0,provision:0};
   for(const m of s.mvts){
@@ -285,7 +285,7 @@ function ruleText(s,type){
 
 /* ---------- Données d'exemple (fictives) ---------- */
 function sample(){
-  const s={sample:true, profile:{prenom:'Lucas', poste:'Pivot', pSal:15, salMode:'pct', salFixe:450, pPrime:50, pAnnexe:40, taux:25, objMois:6, saisons:3, besoinApres:3000,
+  const s={sample:true, profile:{prenom:'Lucas', poste:'Pivot', pSal:15, salMode:'pct', salFixe:450, pPrime:50, pAnnexe:40, taux:25, objMois:6, coussinMode:'mois', coussinMontant:12000, saisons:3, besoinApres:3000,
     charges:[{id:uid(),label:'Loyer',montant:950},{id:uid(),label:'Crédit voiture',montant:380},{id:uid(),label:'Assurances',montant:120},{id:uid(),label:'Téléphone et abonnements',montant:60},{id:uid(),label:'Courses',montant:450}]},
     projets:[{id:'p1',nom:"Diplôme d'entraîneur",budget:1800},{id:'p2',nom:"Stage d'été pour les jeunes",budget:600}], mvts:[]};
   const IN=(date,type,amount,label)=>s.mvts.push({id:uid(),dir:'in',date,type,amount,label,alloc:computeAlloc(s,amount,type)});
@@ -343,7 +343,7 @@ function sources(){
   return Object.entries(t).sort((a,b)=>b[1]-a[1]);
 }
 function projSpent(id){ return S.mvts.filter(m=>m.dir==='out'&&m.projet===id).reduce((a,m)=>a+m.amount,0); }
-function status(months,obj){ if(months>=obj) return ['ok','Objectif atteint']; if(months>=3) return ['mid','En construction']; return ['low','À renforcer']; }
+function status(pct){ if(pct>=1) return ['ok','Objectif atteint']; if(pct>=0.5) return ['mid','En construction']; return ['low','À renforcer']; }
 
 /* ---------- Vues ---------- */
 function header(title, sub){
@@ -355,7 +355,7 @@ function vAccueil(){
   const p=S.profile, b=balances(S), a=anchorMonth(), [y,mo]=a.split('-');
   const st=monthStats(a), ch=chargesTotal(S), tgt=coussinTarget(S);
   const mC = ch? b.coussin/ch : 0, mAll = ch? (b.coussin+b.vivre)/ch : 0;
-  const [cls,lab]=status(mC,p.objMois);
+  const [cls,lab]=status(tgt? b.coussin/tgt : 0);
   const trTarget = 12*p.besoinApres, trLeft=Math.max(0,trTarget-b.transition), perSeason = p.saisons? trLeft/p.saisons : trLeft;
   const recent=[...S.mvts].filter(m=>m.type!=='init').sort((x,z)=>z.date.localeCompare(x.date)).slice(0,5);
   const src=sources(), srcMax=Math.max(1,...src.map(s=>s[1])), srcTot=src.reduce((t,s)=>t+s[1],0);
@@ -372,7 +372,8 @@ function vAccueil(){
     <section class="card s3"><h2>Si tout s'arrête demain <span class="pill ${cls}">${lab}</span></h2>
       <div class="kpi"><b class="num">${mC.toLocaleString('fr-FR',{maximumFractionDigits:1})}</b><span>mois couverts par ton coussin</span></div>
       <div class="gauge" role="img" aria-label="Coussin rempli à ${Math.round(Math.min(100,tgt?b.coussin/tgt*100:0))} %"><i style="width:${Math.min(100,tgt?b.coussin/tgt*100:0)}%"></i></div>
-      <div class="rows"><div><span>Objectif : ${p.objMois} mois de charges</span><b class="num">${eur(tgt)}</b></div><div><span>Il manque</span><b class="num">${eur(Math.max(0,tgt-b.coussin))}</b></div><div><span>Avec le reste à vivre</span><b class="num">${mAll.toLocaleString('fr-FR',{maximumFractionDigits:1})} mois</b></div></div>
+      <div class="rows"><div><span>Objectif${p.coussinMode==='montant'?' fixé':` : ${p.objMois} mois de charges`} · <button class="del" data-go="objectifs">Modifier</button></span><b class="num">${eur(tgt)}</b></div><div><span>Il manque</span><b class="num">${eur(Math.max(0,tgt-b.coussin))}</b></div><div><span>Avec le reste à vivre</span><b class="num">${mAll.toLocaleString('fr-FR',{maximumFractionDigits:1})} mois</b></div></div>
+      <p class="note">${b.coussin>=tgt&&tgt>0?'Objectif atteint : ce que tu mets de côté part maintenant sur ton épargne transition.':'Ce que tu mets de côté remplit d\'abord ce coussin.'}</p>
     </section>
     <section class="card s3"><h2>Préparer l'échéance <small>${p.saisons} saison${p.saisons>1?'s':''} restante${p.saisons>1?'s':''}</small></h2>
       <div class="kpi"><b class="num">${eur(perSeason)}</b><span>à mettre de côté par saison</span></div>
@@ -433,9 +434,15 @@ function vObjectifs(){
   `<div class="grid g-2">
     <section class="card"><h2>Coussin de sécurité</h2>
       <p class="lede">Ton filet en cas de blessure longue, de contrat non renouvelé ou de baisse de salaire. Tes charges fixes : ${eur(ch)} par mois.</p>
-      <div class="field" style="margin-top:12px"><label for="o-mois">Nombre de mois à couvrir</label><div class="range"><input type="range" id="o-mois" min="3" max="12" step="1" value="${p.objMois}" data-prof="objMois"><output class="num">${p.objMois}</output></div></div>
+      <div class="field" style="margin-top:12px"><span class="lab">Comment fixer ton objectif</span>
+        <div class="seg" style="margin:0 0 8px"><button type="button" data-coussinmode="mois" aria-pressed="${(p.coussinMode||'mois')==='mois'}">En mois de charges</button><button type="button" data-coussinmode="montant" aria-pressed="${p.coussinMode==='montant'}">Montant libre</button></div>
+        ${p.coussinMode==='montant'
+          ? `<label for="o-montant" class="lab">Objectif du coussin (€)</label><input id="o-montant" type="number" min="0" step="100" value="${p.coussinMontant??12000}" data-prof="coussinMontant" inputmode="numeric"><p class="note">Ajuste-le quand ta situation change : un nouveau projet, un déménagement, une famille qui s'agrandit.</p>`
+          : `<label for="o-mois" class="lab">Nombre de mois à couvrir</label><div class="range"><input type="range" id="o-mois" min="3" max="12" step="1" value="${p.objMois}" data-prof="objMois"><output class="num">${p.objMois}</output></div>`}
+      </div>
       <div class="gauge"><i style="width:${Math.min(100,tgt?b.coussin/tgt*100:0)}%"></i></div>
       <div class="rows"><div><span>Objectif</span><b class="num">${eur(tgt)}</b></div><div><span>Aujourd'hui</span><b class="num">${eur(b.coussin)}</b></div></div>
+      <p class="note">Ce que tu mets de côté va d'abord ici. Une fois l'objectif atteint, le surplus part sur ton épargne transition. Si tu remontes l'objectif, le coussin se remplit à nouveau.</p>
     </section>
     <section class="card"><h2>Préparer l'échéance</h2>
       <p class="lede">De quoi tenir 12 mois après ta carrière, le temps de lancer la suite.</p>
@@ -545,7 +552,7 @@ function toast(msg){
 
 /* ---------- Événements ---------- */
 document.addEventListener('click',e=>{
-  const el=e.target.closest('[data-salmode],[data-go],[data-action],[data-dir],[data-type],[data-cat],[data-filter],[data-del],[data-delproj],[data-delcharge],[data-confirm]');
+  const el=e.target.closest('[data-coussinmode],[data-salmode],[data-go],[data-action],[data-dir],[data-type],[data-cat],[data-filter],[data-del],[data-delproj],[data-delcharge],[data-confirm]');
   if(!el) return;
   if(el.dataset.action==='close-add' && el.classList.contains('sheet-bg') && e.target!==el) return;
   if(el.dataset.go){ view=el.dataset.go; confirmKind=null; render(); window.scrollTo(0,0); return; }
@@ -557,6 +564,7 @@ document.addEventListener('click',e=>{
   if(el.dataset.delproj){ S.projets=S.projets.filter(p=>p.id!==el.dataset.delproj); save(); render(); return; }
   if(el.dataset.delcharge){ S.profile.charges=S.profile.charges.filter(c=>c.id!==el.dataset.delcharge); recomputeAll(S); save(); render(); return; }
   if(el.dataset.confirm){ confirmKind=el.dataset.confirm; render(); return; }
+  if(el.dataset.coussinmode){ S.profile.coussinMode=el.dataset.coussinmode; if(S.profile.coussinMontant==null) S.profile.coussinMontant=Math.round(coussinTarget(S)/100)*100||12000; recomputeAll(S); save(); render(); return; }
   if(el.dataset.salmode){ S.profile.salMode=el.dataset.salmode; if(S.profile.salFixe==null) S.profile.salFixe=450; recomputeAll(S); save(); render(); return; }
   const a=el.dataset.action;
   if(a==='export'){ try{ const blob=new Blob([JSON.stringify(S,null,2)],{type:'application/json'}); const url=URL.createObjectURL(blob); const ln=document.createElement('a'); ln.href=url; ln.download=`mes-stats-sauvegarde-${todayISO()}.json`; document.body.appendChild(ln); ln.click(); ln.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500); toast('Sauvegarde téléchargée. Garde ce fichier en lieu sûr.'); }catch(err){ toast("La sauvegarde n'a pas pu être créée sur cet appareil."); } return; }
@@ -581,7 +589,7 @@ document.addEventListener('change',e=>{
   const t=e.target;
   if(t.id==='a-src'){ addState.src=t.value; updateSplit(); }
   if(t.id==='imp' && t.files && t.files[0]){ const rd=new FileReader(); rd.onload=()=>{ try{ const d=JSON.parse(rd.result); if(!d||!d.profile||!Array.isArray(d.mvts)) throw 0; d.projets=d.projets||[]; S=d; save(); view='accueil'; render(); toast('Sauvegarde importée.'); }catch(err){ toast("Ce fichier n'est pas une sauvegarde Mes stats."); } }; rd.readAsText(t.files[0]); }
-  if(t.dataset.prof && t.type!=='text' && !(t.id==='r-prenom'||t.id==='r-poste')){ if(['pSal','pPrime','pAnnexe','taux','salFixe','objMois'].includes(t.dataset.prof)) recomputeAll(S); save(); render(); }
+  if(t.dataset.prof && t.type!=='text' && !(t.id==='r-prenom'||t.id==='r-poste')){ if(['pSal','pPrime','pAnnexe','taux','salFixe','objMois','coussinMontant'].includes(t.dataset.prof)) recomputeAll(S); save(); render(); }
   if(t.dataset.charge){ recomputeAll(S); save(); render(); }
 });
 document.addEventListener('submit',e=>{
